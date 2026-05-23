@@ -27,6 +27,7 @@ interface ThemeState {
   const clearBtn = document.getElementById("clearBtn");
   const exportBtn = document.getElementById("exportBtn");
   const exportDocxBtn = document.getElementById("exportDocxBtn");
+  const exportPdfBtn = document.getElementById("exportPdfBtn");
   const themeBtn = document.getElementById("themeBtn");
   const outlineBtn = document.getElementById("outlineBtn");
   const layoutSplitBtn = document.getElementById("layoutSplitBtn");
@@ -714,6 +715,68 @@ interface ThemeState {
     exportDocxBtn.addEventListener("click", () => {
       exportDocxTrue();
     });
+
+  // ---- PDF export (via browser print dialog) ----
+  function exportPdf(): void {
+    const previewHtml = preview.innerHTML;
+    const title = (function () {
+      const h = preview.querySelector("h1, h2, h3");
+      return (h && h.textContent && h.textContent.trim()) || "document";
+    })();
+    const eff = effectiveTheme(readStoredTheme());
+    const prismHref = eff === "dark" ? PRISM_DARK : PRISM_LIGHT;
+    // Inline page-level styles for the print window. Reuse the app stylesheet
+    // so the preview keeps the same typography, then add print-specific rules.
+    const printDoc =
+      '<!doctype html><html><head><meta charset="utf-8"><title>' +
+      title.replace(/[<>&]/g, "") +
+      "</title>" +
+      '<link rel="stylesheet" href="' +
+      location.href.replace(/[^/]*$/, "") +
+      'styles.css">' +
+      '<link rel="stylesheet" href="' +
+      prismHref +
+      '">' +
+      '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">' +
+      "<style>" +
+      "html,body{background:#fff;color:#000;margin:0;padding:0;}" +
+      "body{padding:24px;}" +
+      ".preview{max-width:none;padding:0;overflow:visible;}" +
+      "pre,code{white-space:pre-wrap;word-wrap:break-word;}" +
+      "img,svg,table{max-width:100%;page-break-inside:avoid;}" +
+      "h1,h2,h3,h4,h5,h6{page-break-after:avoid;}" +
+      "@page{margin:18mm;}" +
+      "</style></head><body>" +
+      '<article class="preview">' +
+      previewHtml +
+      "</article></body></html>";
+    const win = window.open("", "_blank");
+    if (!win) {
+      try {
+        alert(
+          "Could not open print window. Please allow pop-ups to export PDF.",
+        );
+      } catch (_) {}
+      return;
+    }
+    win.document.open();
+    win.document.write(printDoc);
+    win.document.close();
+    const doPrint = () => {
+      try {
+        win.focus();
+        win.print();
+      } catch (_) {}
+    };
+    // Wait for stylesheets/fonts to load before triggering print.
+    if (win.document.readyState === "complete") {
+      setTimeout(doPrint, 250);
+    } else {
+      win.addEventListener("load", () => setTimeout(doPrint, 250));
+    }
+  }
+  w.__mdExportPdf = exportPdf;
+  if (exportPdfBtn) exportPdfBtn.addEventListener("click", exportPdf);
 
   // ---- Init ----
   editor.addEventListener("input", () => {
