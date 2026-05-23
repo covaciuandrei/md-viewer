@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Markdown Live Preview</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="toolbar">
+    <h1 class="brand">Markdown Live Preview</h1>
+    <div class="actions">
+      <button id="clearBtn" type="button">Clear</button>
+      <button id="exportBtn" type="button">Export .md</button>
+    </div>
+  </header>
+  <main class="split">
+    <section class="pane">
+      <textarea id="editor" spellcheck="false" placeholder="# Start writing markdown..."></textarea>
+    </section>
+    <section class="pane">
+      <article id="preview" class="preview"></article>
+    </section>
+  </main>
+  <script src="app.js" defer></script>
+</body>
+</html>

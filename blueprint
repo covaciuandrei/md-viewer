@@ -1,0 +1,29 @@
+OBJECTIVE: Build a single-page Markdown Live Preview app unattended.
+CONSTRAINTS: Run tasks sequentially. Validate after each step. Auto-commit to git.
+
+PHASE 1:
+- Action: Create a minimal, beautiful split-screen UI layout in index.html, styles.css.
+- Validation: Create a quick Node script 'test-phase1.js' using jsdom to verify the elements '#editor' and '#preview' exist. Run it via terminal.
+- Git: Run 'git add .' and 'git commit -m "feat: phase 1 - split screen UI setup"'
+
+PHASE 2:
+- Action: Inject marked.js via CDN. Write app.js to handle live debounced compilation.
+- Validation: Expand 'test-phase1.js' to mock an input event with "# Test" and assert that '#preview' contains "<h1>Test</h1>". Run it.
+- Git: Run 'git add .' and 'git commit -m "feat: phase 2 - live compilation engine"'
+
+PHASE 3:
+- Action: Write scroll-synchronization math in app.js with a flag lock to avoid infinite loops.
+- Validation: Mock scroll height properties in the test file, trigger scroll on '#editor', and assert '#preview' scrolls proportionally. Run it.
+- Git: Run 'git add .' and 'git commit -m "feat: phase 3 - dual-pane synchronized scrolling"'
+
+PHASE 4:
+- Action: Add Prism.js for syntax highlighting. Ensure it hooks into the markdown render cycle.
+- Validation: Feed raw code block text to the editor through the test script, verify highlight tokens exist in output. Run it.
+- Git: Run 'git add .' and 'git commit -m "feat: phase 4 - syntax highlighting integration"'
+
+PHASE 5:
+- Action: Add localStorage caching, clear action, and file export utilities.
+- Validation: Mock localStorage in the test suite, ensure text survives a simulated initialization cycle. Run it.
+- Git: Run 'git add .' and 'git commit -m "feat: phase 5 - local state persistence and utilities"'
+
+EXECUTION STATUS: When all phases pass their tests and are committed, print "PIPELINE COMPLETE" and stop.
