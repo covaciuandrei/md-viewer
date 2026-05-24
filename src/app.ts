@@ -1336,7 +1336,8 @@ interface FileNode {
       // If this is an internal node drag, let tree handlers deal with it.
       const types = Array.from(dt.types || []);
       if (types.indexOf(NODE_MIME) !== -1) return;
-      if (!dt.files || dt.files.length === 0) return;
+      const hasFiles = (dt.files && dt.files.length > 0) || (dt.items && dt.items.length > 0);
+      if (!hasFiles) return;
       e.preventDefault();
 
       // Determine drop target folder by walking up the DOM from e.target.
@@ -1354,55 +1355,165 @@ interface FileNode {
         el = el.parentElement;
       }
 
-      const files = Array.from(dt.files);
-      const accepted = files.filter((f) => {
-        const name = (f.name || "").toLowerCase();
-        return (
-          name.endsWith(".md") ||
-          name.endsWith(".markdown") ||
-          name.endsWith(".txt") ||
-          (f.type && f.type.indexOf("text") === 0)
-        );
-      });
-      if (accepted.length === 0) {
-        try {
-          console.warn("md-viewer: no markdown/text files in drop");
-        } catch (_) {}
-        return;
+      // Try the FileSystem entry API for folder support; fall back to flat files.
+      const entries: any[] = [];
+      if (dt.items && dt.items.length > 0) {
+        for (let i = 0; i < dt.items.length; i++) {
+          const item: any = dt.items[i];
+          if (item.kind !== "file") continue;
+          const entry =
+            typeof item.webkitGetAsEntry === "function"
+              ? item.webkitGetAsEntry()
+              : null;
+          if (entry) entries.push(entry);
+        }
       }
 
-      let firstId: string | null = null;
-      let remaining = accepted.length;
-      accepted.forEach((file) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const text = String(reader.result || "");
-          const node = importTextAsFile(file.name, text, parentId);
-          openFile(node.id);
-          if (!firstId) firstId = node.id;
-          remaining--;
-          if (remaining === 0) {
-            saveEditorToActive();
-            state.activeId = firstId;
-            saveState(state);
-            loadActiveIntoEditor();
-            if (parentId) {
-              expanded.add(parentId);
-              saveExpanded();
-            }
-            render();
-            renderTabs();
-            renderTree();
-            updateUsage();
-          }
-        };
-        try {
-          reader.readAsText(file);
-        } catch (_) {
-          remaining--;
-        }
-      });
+      if (entries.length > 0) {
+        importEntries(entries, parentId);
+      } else {
+        importFlatFiles(Array.from(dt.files), parentId);
+      }
     });
+  }
+
+  // Import a flat list of File objects under parentId (legacy / fallback).
+  function importFlatFiles(
+    files: File[],
+    parentId: string | null,
+  ): void {
+    const accepted = files.filter(isAcceptedTextFile);
+    if (accepted.length === 0) {
+      try {
+        console.warn("md-viewer: no markdown/text files in drop");
+      } catch (_) {}
+      return;
+    }
+    let firstId: string | null = null;
+    let remaining = accepted.length;
+    accepted.forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const text = String(reader.result || "");
+        const node = importTextAsFile(file.name, text, parentId);
+        openFile(node.id);
+        if (!firstId) firstId = node.id;
+        remaining--;
+        if (remaining === 0) finalizeImport(firstId, parentId);
+      };
+      try {
+        reader.readAsText(file);
+      } catch (_) {
+        remaining--;
+        if (remaining === 0) finalizeImport(firstId, parentId);
+      }
+    });
+  }
+
+  // Import a list of FileSystemEntry items (supports nested folders).
+  function importEntries(entries: any[], parentId: string | null): void {
+    let firstId: string | null = null;
+    const promises = entries.map((entry) =>
+      walkEntry(entry, parentId).then((id) => {
+        if (!firstId && id) firstId = id;
+      }),
+    );
+    Promise.all(promises).then(() => finalizeImport(firstId, parentId));
+  }
+
+  function walkEntry(
+    entry: any,
+    parentId: string | null,
+  ): Promise<string | null> {
+    if (!entry) return Promise.resolve(null);
+    if (entry.isFile) {
+      return new Promise<string | null>((resolve) => {
+        entry.file(
+          (file: File) => {
+            if (!isAcceptedTextFile(file)) return resolve(null);
+            const reader = new FileReader();
+            reader.onload = () => {
+              const text = String(reader.result || "");
+              const node = importTextAsFile(file.name, text, parentId);
+              openFile(node.id);
+              resolve(node.id);
+            };
+            reader.onerror = () => resolve(null);
+            try {
+              reader.readAsText(file);
+            } catch (_) {
+              resolve(null);
+            }
+          },
+          () => resolve(null),
+        );
+      });
+    }
+    if (entry.isDirectory) {
+      // Create folder, expand it, then walk children.
+      const folder = createFolder(entry.name || "Folder", parentId);
+      expanded.add(folder.id);
+      return readAllDirectoryEntries(entry).then((children) => {
+        let firstChild: string | null = null;
+        return children
+          .reduce<Promise<void>>((p, child) => {
+            return p.then(() =>
+              walkEntry(child, folder.id).then((id) => {
+                if (!firstChild && id) firstChild = id;
+              }),
+            );
+          }, Promise.resolve())
+          .then(() => firstChild);
+      });
+    }
+    return Promise.resolve(null);
+  }
+
+  // Directory readers may yield results in batches; keep calling readEntries
+  // until it returns an empty array (per the Filesystem API spec).
+  function readAllDirectoryEntries(directory: any): Promise<any[]> {
+    return new Promise((resolve) => {
+      const reader = directory.createReader();
+      const all: any[] = [];
+      const readBatch = () => {
+        reader.readEntries(
+          (batch: any[]) => {
+            if (!batch || batch.length === 0) return resolve(all);
+            for (const e of batch) all.push(e);
+            readBatch();
+          },
+          () => resolve(all),
+        );
+      };
+      readBatch();
+    });
+  }
+
+  function isAcceptedTextFile(f: { name?: string; type?: string }): boolean {
+    const name = (f.name || "").toLowerCase();
+    return (
+      name.endsWith(".md") ||
+      name.endsWith(".markdown") ||
+      name.endsWith(".txt") ||
+      (!!f.type && f.type.indexOf("text") === 0)
+    );
+  }
+
+  function finalizeImport(firstId: string | null, parentId: string | null): void {
+    if (firstId) {
+      saveEditorToActive();
+      state.activeId = firstId;
+    }
+    if (parentId) {
+      expanded.add(parentId);
+    }
+    saveExpanded();
+    saveState(state);
+    loadActiveIntoEditor();
+    render();
+    renderTabs();
+    renderTree();
+    updateUsage();
   }
   setupDragDrop();
 
