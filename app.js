@@ -39,6 +39,9 @@
     const LAYOUT_KEY = "md-viewer:layout";
     const SPLIT_KEY = "md-viewer:split";
     const OUTLINE_KEY = "md-viewer:outline";
+    // App version — bump in lock-step with package.json "version" and the
+    // app.js cache-bust query in index.html (?v=...). See .github/copilot-instructions.md.
+    const APP_VERSION = "1.1.0";
     const PRISM_LIGHT = "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css";
     const PRISM_DARK = "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css";
     const DEBOUNCE_MS = w.__DEBOUNCE_MS !== undefined ? w.__DEBOUNCE_MS : 150;
@@ -559,7 +562,15 @@
             const fileCount = state.nodes.filter((n) => n.type === "file").length;
             const kb = (bytes / 1024).toFixed(1);
             filesUsageEl.textContent =
-                fileCount + " file" + (fileCount === 1 ? "" : "s") + " · " + kb + " KB";
+                "v" +
+                    APP_VERSION +
+                    " · " +
+                    fileCount +
+                    " file" +
+                    (fileCount === 1 ? "" : "s") +
+                    " · " +
+                    kb +
+                    " KB";
         }
         catch (_) { }
     }

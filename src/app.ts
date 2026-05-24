@@ -73,6 +73,9 @@ interface FileNode {
   const LAYOUT_KEY = "md-viewer:layout";
   const SPLIT_KEY = "md-viewer:split";
   const OUTLINE_KEY = "md-viewer:outline";
+  // App version — bump in lock-step with package.json "version" and the
+  // app.js cache-bust query in index.html (?v=...). See .github/copilot-instructions.md.
+  const APP_VERSION = "1.1.0";
   const PRISM_LIGHT =
     "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css";
   const PRISM_DARK =
@@ -638,7 +641,15 @@ interface FileNode {
       const fileCount = state.nodes.filter((n) => n.type === "file").length;
       const kb = (bytes / 1024).toFixed(1);
       filesUsageEl.textContent =
-        fileCount + " file" + (fileCount === 1 ? "" : "s") + " · " + kb + " KB";
+        "v" +
+        APP_VERSION +
+        " · " +
+        fileCount +
+        " file" +
+        (fileCount === 1 ? "" : "s") +
+        " · " +
+        kb +
+        " KB";
     } catch (_) {}
   }
 
@@ -1336,7 +1347,8 @@ interface FileNode {
       // If this is an internal node drag, let tree handlers deal with it.
       const types = Array.from(dt.types || []);
       if (types.indexOf(NODE_MIME) !== -1) return;
-      const hasFiles = (dt.files && dt.files.length > 0) || (dt.items && dt.items.length > 0);
+      const hasFiles =
+        (dt.files && dt.files.length > 0) || (dt.items && dt.items.length > 0);
       if (!hasFiles) return;
       e.preventDefault();
 
@@ -1378,10 +1390,7 @@ interface FileNode {
   }
 
   // Import a flat list of File objects under parentId (legacy / fallback).
-  function importFlatFiles(
-    files: File[],
-    parentId: string | null,
-  ): void {
+  function importFlatFiles(files: File[], parentId: string | null): void {
     const accepted = files.filter(isAcceptedTextFile);
     if (accepted.length === 0) {
       try {
@@ -1499,7 +1508,10 @@ interface FileNode {
     );
   }
 
-  function finalizeImport(firstId: string | null, parentId: string | null): void {
+  function finalizeImport(
+    firstId: string | null,
+    parentId: string | null,
+  ): void {
     if (firstId) {
       saveEditorToActive();
       state.activeId = firstId;
