@@ -105,8 +105,26 @@
               </button>
             </span>
           </div>
+          <div class="files-search-row">
+            <input
+              id="filesSearch"
+              type="search"
+              class="files-search"
+              placeholder="Filter files…"
+              aria-label="Filter files"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </div>
           <ul id="filesTree" class="files-tree"></ul>
-          <div id="filesUsage" class="files-usage" aria-live="polite"></div>
+          <div class="files-usage">
+            <span
+              id="filesUsage"
+              class="files-usage-text"
+              aria-live="polite"
+            ></span>
+            <span id="saveStatus" class="save-status" aria-live="polite"></span>
+          </div>
         </div>
         <div id="outline" class="outline" aria-label="Document outline"></div>
       </aside>
@@ -155,6 +173,6 @@
     <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
     <script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <script src="app.js?v=1.1.0" defer></script>
+    <script src="app.js?v=1.2.0" defer></script>
   </body>
 </html>

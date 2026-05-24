@@ -1,24 +1,19 @@
 {
   "name": "md-viewer",
-  "version": "1.1.0",
-  "main": "index.js",
+  "version": "1.2.0",
+  "private": true,
+  "description": "Static zero-backend Markdown editor with live preview, multi-file workspace, outline, math, diagrams, and Word/PDF/ZIP export.",
+  "license": "ISC",
   "scripts": {
     "build": "tsc && cp build/app.js app.js",
     "test": "npm run build && node test-phase1.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
-  "dependencies": {
-    "docx": "^9.6.1",
+  "devDependencies": {
+    "@types/node": "^25.9.1",
     "dompurify": "^3.4.5",
     "jsdom": "^29.1.1",
     "marked": "^18.0.4",
-    "prismjs": "^1.30.0"
-  },
-  "devDependencies": {
-    "@types/node": "^25.9.1",
+    "prismjs": "^1.30.0",
     "typescript": "^5.5.4"
   }
 }

@@ -53,6 +53,12 @@ interface FileNode {
   const filesUsageEl = document.getElementById(
     "filesUsage",
   ) as HTMLElement | null;
+  const saveStatusEl = document.getElementById(
+    "saveStatus",
+  ) as HTMLElement | null;
+  const filesSearchEl = document.getElementById(
+    "filesSearch",
+  ) as HTMLInputElement | null;
   const tabBarEl = document.getElementById("tabBar") as HTMLElement | null;
   const layoutSplitBtn = document.getElementById("layoutSplitBtn");
   const layoutEditorBtn = document.getElementById("layoutEditorBtn");
@@ -75,7 +81,7 @@ interface FileNode {
   const OUTLINE_KEY = "md-viewer:outline";
   // App version — bump in lock-step with package.json "version" and the
   // app.js cache-bust query in index.html (?v=...). See .github/copilot-instructions.md.
-  const APP_VERSION = "1.1.0";
+  const APP_VERSION = "1.2.0";
   const PRISM_LIGHT =
     "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css";
   const PRISM_DARK =
@@ -359,9 +365,7 @@ interface FileNode {
         (e.name === "QuotaExceededError" || e.code === 22 || e.code === 1014)
       ) {
         try {
-          if (filesUsageEl)
-            filesUsageEl.textContent =
-              "Storage full — delete files or shrink content.";
+          setSaveStatus("error");
         } catch (_) {}
       }
       return false;
@@ -534,12 +538,13 @@ interface FileNode {
   function readDoc(id: string): string {
     return safeGet(DOC_PREFIX + id) || "";
   }
-  function writeDoc(id: string, text: string): void {
-    safeSet(DOC_PREFIX + id, text);
+  function writeDoc(id: string, text: string): boolean {
+    const ok = safeSet(DOC_PREFIX + id, text);
     const n = findNode(id);
     if (n) {
       n.updatedAt = Date.now();
     }
+    return ok;
   }
 
   function openFile(id: string): void {
@@ -607,9 +612,9 @@ interface FileNode {
     }
     editor.value = readDoc(state.activeId);
   }
-  function saveEditorToActive(): void {
-    if (!state.activeId) return;
-    writeDoc(state.activeId, editor.value);
+  function saveEditorToActive(): boolean {
+    if (!state.activeId) return true;
+    return writeDoc(state.activeId, editor.value);
   }
 
   function setActive(id: string): void {
@@ -626,6 +631,14 @@ interface FileNode {
   }
 
   // ---- Storage usage indicator ----
+  function countWords(text: string): number {
+    const m = (text || "").match(/\S+/g);
+    return m ? m.length : 0;
+  }
+  function formatCount(n: number): string {
+    if (n >= 10000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+    return String(n);
+  }
   function updateUsage(): void {
     if (!filesUsageEl) return;
     try {
@@ -640,6 +653,9 @@ interface FileNode {
       }
       const fileCount = state.nodes.filter((n) => n.type === "file").length;
       const kb = (bytes / 1024).toFixed(1);
+      const text = editor.value || "";
+      const words = countWords(text);
+      const chars = text.length;
       filesUsageEl.textContent =
         "v" +
         APP_VERSION +
@@ -649,8 +665,43 @@ interface FileNode {
         (fileCount === 1 ? "" : "s") +
         " · " +
         kb +
-        " KB";
+        " KB · " +
+        formatCount(words) +
+        " word" +
+        (words === 1 ? "" : "s") +
+        " · " +
+        formatCount(chars) +
+        " char" +
+        (chars === 1 ? "" : "s");
     } catch (_) {}
+  }
+
+  // ---- Save status indicator ----
+  type SaveState = "idle" | "saving" | "saved" | "error";
+  let savedFlashTimer: any = null;
+  function setSaveStatus(s: SaveState): void {
+    if (!saveStatusEl) return;
+    if (savedFlashTimer) {
+      clearTimeout(savedFlashTimer);
+      savedFlashTimer = null;
+    }
+    saveStatusEl.removeAttribute("data-state");
+    if (s === "idle") {
+      saveStatusEl.textContent = "";
+      return;
+    }
+    saveStatusEl.setAttribute("data-state", s);
+    if (s === "saving") {
+      saveStatusEl.textContent = "Saving…";
+    } else if (s === "saved") {
+      saveStatusEl.textContent = "Saved";
+      savedFlashTimer = setTimeout(() => {
+        if (saveStatusEl && saveStatusEl.getAttribute("data-state") === "saved")
+          setSaveStatus("idle");
+      }, 1200);
+    } else if (s === "error") {
+      saveStatusEl.textContent = "Storage full";
+    }
   }
 
   // Legacy storage helpers kept as no-ops for back-compat with tests/window API.
@@ -658,8 +709,9 @@ interface FileNode {
     loadActiveIntoEditor();
   }
   function saveToStorage(): void {
-    saveEditorToActive();
+    const ok = saveEditorToActive();
     updateUsage();
+    setSaveStatus(ok ? "saved" : "error");
   }
   w.__mdStorageKey = STORAGE_KEY;
   w.__mdFilesKey = FILES_KEY;
@@ -905,21 +957,44 @@ interface FileNode {
   w.__mdCloseTab = closeTab;
 
   // ---- Files tree ----
+  let treeFilter = "";
+  function computeVisibleIds(): Set<string> | null {
+    if (!treeFilter) return null;
+    const q = treeFilter.toLowerCase();
+    const visible = new Set<string>();
+    for (const n of state.nodes) {
+      if (n.type === "file" && n.name.toLowerCase().indexOf(q) !== -1) {
+        visible.add(n.id);
+        let p = n.parentId;
+        while (p) {
+          visible.add(p);
+          const par = findNode(p);
+          p = par ? par.parentId : null;
+        }
+      }
+    }
+    return visible;
+  }
   function renderTree(): void {
     if (!filesTreeEl) return;
     filesTreeEl.innerHTML = "";
-    const roots = childrenOf(null);
+    const visible = computeVisibleIds();
+    const roots = childrenOf(null).filter((n) => !visible || visible.has(n.id));
     if (roots.length === 0) {
       const empty = document.createElement("li");
       empty.className = "files-empty";
-      empty.textContent = "No files yet";
+      empty.textContent = visible ? "No matches" : "No files yet";
       filesTreeEl.appendChild(empty);
     } else {
-      roots.forEach((n) => filesTreeEl.appendChild(renderNode(n, 0)));
+      roots.forEach((n) => filesTreeEl.appendChild(renderNode(n, 0, visible)));
     }
   }
 
-  function renderNode(node: FileNode, depth: number): HTMLLIElement {
+  function renderNode(
+    node: FileNode,
+    depth: number,
+    visible?: Set<string> | null,
+  ): HTMLLIElement {
     const li = document.createElement("li");
     li.className =
       "tree-node " + (node.type === "folder" ? "folder-node" : "file-node");
@@ -1022,12 +1097,12 @@ interface FileNode {
 
     li.appendChild(row);
 
-    if (node.type === "folder" && expanded.has(node.id)) {
+    if (node.type === "folder" && (visible || expanded.has(node.id))) {
       const ul = document.createElement("ul");
       ul.className = "tree-children";
-      childrenOf(node.id).forEach((c) =>
-        ul.appendChild(renderNode(c, depth + 1)),
-      );
+      childrenOf(node.id)
+        .filter((c) => !visible || visible.has(c.id))
+        .forEach((c) => ul.appendChild(renderNode(c, depth + 1, visible)));
       li.appendChild(ul);
     }
 
@@ -1195,6 +1270,23 @@ interface FileNode {
 
   if (newFileBtn) newFileBtn.addEventListener("click", promptNewFile);
   if (newFolderBtn) newFolderBtn.addEventListener("click", promptNewFolder);
+
+  // ---- File tree filter input ----
+  if (filesSearchEl) {
+    filesSearchEl.addEventListener("input", () => {
+      treeFilter = (filesSearchEl.value || "").trim();
+      renderTree();
+    });
+    filesSearchEl.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        filesSearchEl.value = "";
+        treeFilter = "";
+        renderTree();
+        filesSearchEl.blur();
+      }
+    });
+  }
 
   // ---- Clear all workspace ----
   function clearAllWorkspace(): void {

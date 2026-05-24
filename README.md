@@ -1,23 +1,27 @@
 # Markdown Live Preview
 
-A fast, zero-backend Markdown editor with a live preview pane, theme switcher, outline navigation, and Word/Markdown export. Everything runs in the browser — no server, no signup.
+A fast, zero-backend Markdown editor with a live preview pane, multi-file workspace, outline navigation, theme switcher, and Word / PDF / ZIP export. Everything runs in the browser — no server, no signup.
 
 ## Features
 
 - **Split-screen editor + preview** with debounced live compilation
 - **Synchronized scrolling** between editor and preview
+- **Multi-file workspace** — sidebar tree with folders, tabs, drag-and-drop reordering, rename (F2), and per-file localStorage
+- **File tree filter** — quick name search in the sidebar (Esc to clear)
+- **Writer stats + save status** — live word / character counts and a save indicator in the sidebar footer
 - **GitHub Flavored Markdown**: tables, task lists, strikethrough, autolinks, footnotes
 - **Syntax highlighting** for code blocks (Prism.js)
 - **Math** via KaTeX — `$inline$` and `$$display$$`
 - **Diagrams** via Mermaid — ` ```mermaid ` code blocks
 - **HTML sanitization** with DOMPurify (XSS-safe rendering)
-- **Auto-generated TOC / outline panel** with collapsible nesting and smooth scroll
+- **Auto-generated outline panel** with collapsible nesting and smooth scroll
 - **Theme switcher** — Light / Dark / System (defaults to OS preference)
 - **Layout toggle** — editor only, split, or preview only
 - **Resizable splitter** (drag the divider; width persists)
-- **Drag-and-drop** `.md` files to open them
-- **Local persistence** — content, theme, layout, and split position survive reloads
-- **Export** as `.md` or true Office Open XML `.docx` (via the `docx` library)
+- **Drag-and-drop import** for `.md`, `.markdown`, `.txt` files and full folders (preserves structure)
+- **Local persistence** — files, content, theme, layout, split, sidebar, and outline state survive reloads
+- **Export** as Markdown (`.md`), true Office Open XML Word (`.docx`), PDF (via print), or a `.zip` of the whole workspace
+- **Keyboard shortcuts** — `Ctrl/Cmd+N` new file, `Ctrl/Cmd+W` close tab, `Ctrl/Cmd+Tab` cycle tabs, `F2` rename, `Delete` remove
 
 ## Quick start
 
@@ -46,17 +50,17 @@ python3 -m http.server 8000
 ├── src/app.ts          # TypeScript source
 ├── app.js              # compiled output (committed for static hosting)
 ├── tsconfig.json       # TS build config
-├── test-phase1.js      # jsdom-based test suite (phases 1–17)
+├── test-phase1.js      # jsdom-based test suite (phases 1–19)
 ├── build/              # tsc output (gitignored)
 └── blueprint           # original spec
 ```
 
 ## Scripts
 
-| Command           | What it does                                                  |
-| ----------------- | ------------------------------------------------------------- |
-| `npm run build`   | Compiles `src/app.ts` → `build/app.js` and copies to `app.js` |
-| `npm test`        | Builds, then runs the jsdom progressive test suite            |
+| Command         | What it does                                                  |
+| --------------- | ------------------------------------------------------------- |
+| `npm run build` | Compiles `src/app.ts` → `build/app.js` and copies to `app.js` |
+| `npm test`      | Builds, then runs the jsdom progressive test suite            |
 
 Run a subset of phases:
 
@@ -94,7 +98,7 @@ Theme, layout, splitter width, outline visibility, and document content all pers
 
 ## Testing
 
-`test-phase1.js` is a progressive jsdom suite covering 17 development phases — DOM structure, rendering, persistence, theming, sanitization, GFM, KaTeX, Mermaid, outline, layout, drag-and-drop, and `.docx` export. Heavy libraries are stubbed where appropriate.
+`test-phase1.js` is a progressive jsdom suite covering 19 development phases — DOM structure, rendering, persistence, theming, sanitization, GFM, KaTeX, Mermaid, outline, layout, drag-and-drop, `.docx` export, multi-file workspace, and writer stats / save status / file filter. Heavy libraries are stubbed where appropriate.
 
 ```bash
 npm test

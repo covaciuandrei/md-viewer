@@ -22,6 +22,8 @@
     const clearAllBtn = document.getElementById("clearAllBtn");
     const filesTreeEl = document.getElementById("filesTree");
     const filesUsageEl = document.getElementById("filesUsage");
+    const saveStatusEl = document.getElementById("saveStatus");
+    const filesSearchEl = document.getElementById("filesSearch");
     const tabBarEl = document.getElementById("tabBar");
     const layoutSplitBtn = document.getElementById("layoutSplitBtn");
     const layoutEditorBtn = document.getElementById("layoutEditorBtn");
@@ -41,7 +43,7 @@
     const OUTLINE_KEY = "md-viewer:outline";
     // App version — bump in lock-step with package.json "version" and the
     // app.js cache-bust query in index.html (?v=...). See .github/copilot-instructions.md.
-    const APP_VERSION = "1.1.0";
+    const APP_VERSION = "1.2.0";
     const PRISM_LIGHT = "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css";
     const PRISM_DARK = "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css";
     const DEBOUNCE_MS = w.__DEBOUNCE_MS !== undefined ? w.__DEBOUNCE_MS : 150;
@@ -286,9 +288,7 @@
             if (e &&
                 (e.name === "QuotaExceededError" || e.code === 22 || e.code === 1014)) {
                 try {
-                    if (filesUsageEl)
-                        filesUsageEl.textContent =
-                            "Storage full — delete files or shrink content.";
+                    setSaveStatus("error");
                 }
                 catch (_) { }
             }
@@ -452,11 +452,12 @@
         return safeGet(DOC_PREFIX + id) || "";
     }
     function writeDoc(id, text) {
-        safeSet(DOC_PREFIX + id, text);
+        const ok = safeSet(DOC_PREFIX + id, text);
         const n = findNode(id);
         if (n) {
             n.updatedAt = Date.now();
         }
+        return ok;
     }
     function openFile(id) {
         if (state.openIds.indexOf(id) === -1)
@@ -527,8 +528,8 @@
     }
     function saveEditorToActive() {
         if (!state.activeId)
-            return;
-        writeDoc(state.activeId, editor.value);
+            return true;
+        return writeDoc(state.activeId, editor.value);
     }
     function setActive(id) {
         if (!findNode(id))
@@ -545,6 +546,15 @@
         renderTree();
     }
     // ---- Storage usage indicator ----
+    function countWords(text) {
+        const m = (text || "").match(/\S+/g);
+        return m ? m.length : 0;
+    }
+    function formatCount(n) {
+        if (n >= 10000)
+            return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+        return String(n);
+    }
     function updateUsage() {
         if (!filesUsageEl)
             return;
@@ -561,6 +571,9 @@
             }
             const fileCount = state.nodes.filter((n) => n.type === "file").length;
             const kb = (bytes / 1024).toFixed(1);
+            const text = editor.value || "";
+            const words = countWords(text);
+            const chars = text.length;
             filesUsageEl.textContent =
                 "v" +
                     APP_VERSION +
@@ -570,17 +583,53 @@
                     (fileCount === 1 ? "" : "s") +
                     " · " +
                     kb +
-                    " KB";
+                    " KB · " +
+                    formatCount(words) +
+                    " word" +
+                    (words === 1 ? "" : "s") +
+                    " · " +
+                    formatCount(chars) +
+                    " char" +
+                    (chars === 1 ? "" : "s");
         }
         catch (_) { }
+    }
+    let savedFlashTimer = null;
+    function setSaveStatus(s) {
+        if (!saveStatusEl)
+            return;
+        if (savedFlashTimer) {
+            clearTimeout(savedFlashTimer);
+            savedFlashTimer = null;
+        }
+        saveStatusEl.removeAttribute("data-state");
+        if (s === "idle") {
+            saveStatusEl.textContent = "";
+            return;
+        }
+        saveStatusEl.setAttribute("data-state", s);
+        if (s === "saving") {
+            saveStatusEl.textContent = "Saving…";
+        }
+        else if (s === "saved") {
+            saveStatusEl.textContent = "Saved";
+            savedFlashTimer = setTimeout(() => {
+                if (saveStatusEl && saveStatusEl.getAttribute("data-state") === "saved")
+                    setSaveStatus("idle");
+            }, 1200);
+        }
+        else if (s === "error") {
+            saveStatusEl.textContent = "Storage full";
+        }
     }
     // Legacy storage helpers kept as no-ops for back-compat with tests/window API.
     function loadFromStorage() {
         loadActiveIntoEditor();
     }
     function saveToStorage() {
-        saveEditorToActive();
+        const ok = saveEditorToActive();
         updateUsage();
+        setSaveStatus(ok ? "saved" : "error");
     }
     w.__mdStorageKey = STORAGE_KEY;
     w.__mdFilesKey = FILES_KEY;
@@ -840,22 +889,42 @@
     w.__mdRenderTabs = renderTabs;
     w.__mdCloseTab = closeTab;
     // ---- Files tree ----
+    let treeFilter = "";
+    function computeVisibleIds() {
+        if (!treeFilter)
+            return null;
+        const q = treeFilter.toLowerCase();
+        const visible = new Set();
+        for (const n of state.nodes) {
+            if (n.type === "file" && n.name.toLowerCase().indexOf(q) !== -1) {
+                visible.add(n.id);
+                let p = n.parentId;
+                while (p) {
+                    visible.add(p);
+                    const par = findNode(p);
+                    p = par ? par.parentId : null;
+                }
+            }
+        }
+        return visible;
+    }
     function renderTree() {
         if (!filesTreeEl)
             return;
         filesTreeEl.innerHTML = "";
-        const roots = childrenOf(null);
+        const visible = computeVisibleIds();
+        const roots = childrenOf(null).filter((n) => !visible || visible.has(n.id));
         if (roots.length === 0) {
             const empty = document.createElement("li");
             empty.className = "files-empty";
-            empty.textContent = "No files yet";
+            empty.textContent = visible ? "No matches" : "No files yet";
             filesTreeEl.appendChild(empty);
         }
         else {
-            roots.forEach((n) => filesTreeEl.appendChild(renderNode(n, 0)));
+            roots.forEach((n) => filesTreeEl.appendChild(renderNode(n, 0, visible)));
         }
     }
-    function renderNode(node, depth) {
+    function renderNode(node, depth, visible) {
         const li = document.createElement("li");
         li.className =
             "tree-node " + (node.type === "folder" ? "folder-node" : "file-node");
@@ -961,10 +1030,12 @@
             e.dataTransfer.effectAllowed = "move";
         });
         li.appendChild(row);
-        if (node.type === "folder" && expanded.has(node.id)) {
+        if (node.type === "folder" && (visible || expanded.has(node.id))) {
             const ul = document.createElement("ul");
             ul.className = "tree-children";
-            childrenOf(node.id).forEach((c) => ul.appendChild(renderNode(c, depth + 1)));
+            childrenOf(node.id)
+                .filter((c) => !visible || visible.has(c.id))
+                .forEach((c) => ul.appendChild(renderNode(c, depth + 1, visible)));
             li.appendChild(ul);
         }
         // Folder-wide drop zone: drop anywhere inside the folder's <li>
@@ -1144,6 +1215,22 @@
         newFileBtn.addEventListener("click", promptNewFile);
     if (newFolderBtn)
         newFolderBtn.addEventListener("click", promptNewFolder);
+    // ---- File tree filter input ----
+    if (filesSearchEl) {
+        filesSearchEl.addEventListener("input", () => {
+            treeFilter = (filesSearchEl.value || "").trim();
+            renderTree();
+        });
+        filesSearchEl.addEventListener("keydown", (e) => {
+            if (e.key === "Escape") {
+                e.preventDefault();
+                filesSearchEl.value = "";
+                treeFilter = "";
+                renderTree();
+                filesSearchEl.blur();
+            }
+        });
+    }
     // ---- Clear all workspace ----
     function clearAllWorkspace() {
         let ok = true;

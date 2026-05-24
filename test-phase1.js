@@ -1,4 +1,4 @@
-// Progressive test suite — phases 1..17.
+// Progressive test suite — phases 1..19.
 const fs = require("fs");
 const path = require("path");
 const { JSDOM, VirtualConsole } = require("jsdom");
@@ -13,7 +13,7 @@ const html = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
 const appSrc = fs.readFileSync(path.join(ROOT, "app.js"), "utf8");
 const cssSrc = fs.readFileSync(path.join(ROOT, "styles.css"), "utf8");
 
-const PHASE = parseInt(process.env.PHASE || "18", 10);
+const PHASE = parseInt(process.env.PHASE || "19", 10);
 
 let passes = 0,
   fails = 0;
@@ -1002,6 +1002,126 @@ function makeDocxStub(BlobCtor) {
       assert(
         recorded.paths.indexOf("Docs/guide.md") !== -1,
         "nested file path written to zip",
+      );
+    }
+  }
+
+  // ---------- PHASE 19: writer stats + save status + file filter ----
+  if (PHASE >= 19) {
+    console.log("\n[Phase 19] writer stats, save status, file filter");
+
+    // 1) Usage footer shows word + char counts for the active doc
+    {
+      const { window, document } = buildDom({
+        debounce: 0,
+        storage: makeMemoryStorage(),
+      });
+      const editor = document.querySelector("#editor");
+      editor.value = "hello world foo bar";
+      editor.dispatchEvent(new window.Event("input", { bubbles: true }));
+      const usage = document.querySelector("#filesUsage").textContent;
+      assert(/4 words/.test(usage), "usage shows word count");
+      assert(/19 chars/.test(usage), "usage shows char count");
+      assert(/v\d+\.\d+\.\d+/.test(usage), "usage still shows version");
+    }
+
+    // 2) Save status reports successful save after typing
+    {
+      const { window, document } = buildDom({
+        debounce: 0,
+        storage: makeMemoryStorage(),
+      });
+      const status = document.querySelector("#saveStatus");
+      assert(!!status, "#saveStatus element exists");
+      const editor = document.querySelector("#editor");
+      editor.value = "x";
+      editor.dispatchEvent(new window.Event("input", { bubbles: true }));
+      assert(
+        status.getAttribute("data-state") === "saved",
+        "save status = saved after input",
+      );
+      assert(/saved/i.test(status.textContent), "save status text = Saved");
+    }
+
+    // 3) Save status reports quota error
+    {
+      const storage = makeMemoryStorage();
+      const realSet = storage.setItem.bind(storage);
+      // Allow boot-time writes, then force failure on user edits.
+      let allowed = true;
+      storage.setItem = function (k, v) {
+        if (!allowed) {
+          const e = new Error("quota");
+          e.name = "QuotaExceededError";
+          throw e;
+        }
+        realSet(k, v);
+      };
+      const { window, document } = buildDom({ debounce: 0, storage });
+      allowed = false;
+      const editor = document.querySelector("#editor");
+      editor.value = "x";
+      editor.dispatchEvent(new window.Event("input", { bubbles: true }));
+      const status = document.querySelector("#saveStatus");
+      assert(
+        status.getAttribute("data-state") === "error",
+        "save status = error on quota fail",
+      );
+      assert(
+        /storage full/i.test(status.textContent),
+        "save status text = Storage full",
+      );
+    }
+
+    // 4) File tree filter hides non-matches and keeps ancestor folders
+    {
+      const storage = makeMemoryStorage();
+      const { window, document } = buildDom({ debounce: 0, storage });
+      // Create a folder + nested file + a sibling file at root
+      window.prompt = () => "Docs";
+      window.__mdNewFolder();
+      let st = window.__mdFilesState();
+      const folder = st.nodes.find((n) => n.type === "folder");
+      window.prompt = () => "alpha.md";
+      window.__mdNewFile();
+      st = window.__mdFilesState();
+      const alpha = st.nodes.find((n) => n.name === "alpha.md");
+      window.__mdMoveNode(alpha.id, folder.id);
+      window.prompt = () => "beta.md";
+      window.__mdNewFile();
+
+      const search = document.querySelector("#filesSearch");
+      assert(!!search, "#filesSearch input exists");
+      search.value = "alph";
+      search.dispatchEvent(new window.Event("input", { bubbles: true }));
+      let labels = Array.from(
+        document.querySelectorAll("#filesTree .tree-label"),
+      ).map((e) => e.textContent);
+      assert(labels.indexOf("alpha.md") !== -1, "filter keeps matches");
+      assert(
+        labels.indexOf("Docs") !== -1,
+        "filter keeps ancestor folder of match",
+      );
+      assert(labels.indexOf("beta.md") === -1, "filter hides non-matches");
+
+      // Clear filter restores everything
+      search.value = "";
+      search.dispatchEvent(new window.Event("input", { bubbles: true }));
+      labels = Array.from(
+        document.querySelectorAll("#filesTree .tree-label"),
+      ).map((e) => e.textContent);
+      assert(
+        labels.indexOf("beta.md") !== -1,
+        "clearing filter restores hidden items",
+      );
+
+      // No matches → "No matches" placeholder
+      search.value = "zzzzzzz";
+      search.dispatchEvent(new window.Event("input", { bubbles: true }));
+      const empty = document.querySelector("#filesTree .files-empty");
+      assert(
+        !!empty && /no matches/i.test(empty.textContent),
+        "empty filter result shows 'No matches'",
       );
     }
   }

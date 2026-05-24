@@ -315,6 +315,63 @@ body[data-outline="off"] .files-panel {
   color: var(--muted);
   border-top: 1px solid var(--border);
   background: var(--panel-2);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.files-usage-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.save-status {
+  flex-shrink: 0;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+  transition:
+    color 0.15s,
+    opacity 0.15s;
+}
+.save-status:empty {
+  display: none;
+}
+.save-status[data-state="saving"] {
+  color: var(--muted);
+}
+.save-status[data-state="saved"] {
+  color: var(--accent);
+}
+.save-status[data-state="error"] {
+  color: #ef4444;
+  font-weight: 600;
+}
+
+.files-search-row {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.files-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 8px;
+  font-size: 12px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  outline: none;
+  font-family: inherit;
+}
+.files-search:focus {
+  border-color: var(--accent);
+}
+.files-search::-webkit-search-cancel-button {
+  cursor: pointer;
 }
 
 /* Tab bar */
