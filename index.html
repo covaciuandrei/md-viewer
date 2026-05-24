@@ -15,12 +15,15 @@
       href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css"
     />
   </head>
-  <body data-layout="split" data-outline="on">
+  <body data-layout="split" data-outline="on" data-sidebar="on">
     <header class="toolbar">
       <h1 class="brand">Markdown Live Preview</h1>
       <div class="actions">
+        <button id="filesBtn" type="button" title="Toggle files sidebar">
+          📁 Files
+        </button>
         <button id="outlineBtn" type="button" title="Toggle outline panel">
-          Outline
+          📑 Outline
         </button>
         <span class="layout-group" role="group" aria-label="Layout">
           <button id="layoutEditorBtn" type="button" title="Editor only">
@@ -45,22 +48,68 @@
         >
           Theme
         </button>
-        <button id="clearBtn" type="button">Clear</button>
-        <button id="exportBtn" type="button">.md</button>
-        <button id="exportDocxBtn" type="button">.docx</button>
-        <button
-          id="exportPdfBtn"
-          type="button"
-          title="Export as PDF (print dialog)"
-        >
-          .pdf
-        </button>
+        <div class="dropdown" id="exportDropdown">
+          <button
+            id="exportMenuBtn"
+            type="button"
+            aria-haspopup="menu"
+            aria-expanded="false"
+            title="Export current or all files"
+          >
+            ⬇ Export ▾
+          </button>
+          <ul id="exportMenu" class="dropdown-menu" role="menu" hidden>
+            <li role="none">
+              <button id="exportBtn" type="button" role="menuitem">
+                📝 Markdown (.md)
+              </button>
+            </li>
+            <li role="none">
+              <button id="exportDocxBtn" type="button" role="menuitem">
+                📄 Word (.docx)
+              </button>
+            </li>
+            <li role="none">
+              <button id="exportPdfBtn" type="button" role="menuitem">
+                🗄️ PDF (.pdf)
+              </button>
+            </li>
+            <li role="none">
+              <button id="exportZipBtn" type="button" role="menuitem">
+                📦 All files (.zip)
+              </button>
+            </li>
+          </ul>
+        </div>
       </div>
     </header>
     <div class="shell">
-      <aside id="outline" class="outline" aria-label="Document outline"></aside>
+      <aside class="shell-sidebar" aria-label="Sidebar">
+        <div id="filesPanel" class="files-panel" aria-label="Files">
+          <div class="files-header">
+            <span class="files-title">Files</span>
+            <span class="files-actions">
+              <button id="newFileBtn" type="button" title="New file">
+                + File
+              </button>
+              <button id="newFolderBtn" type="button" title="New folder">
+                + Folder
+              </button>
+            </span>
+          </div>
+          <ul id="filesTree" class="files-tree"></ul>
+          <div id="filesUsage" class="files-usage" aria-live="polite"></div>
+        </div>
+        <div id="outline" class="outline" aria-label="Document outline"></div>
+      </aside>
       <main class="split">
         <section class="pane pane-editor">
+          <div
+            id="tabBar"
+            class="tab-bar"
+            role="tablist"
+            aria-label="Open files"
+          ></div>
           <textarea
             id="editor"
             spellcheck="false"
@@ -80,7 +129,7 @@
       </main>
     </div>
     <div id="dropOverlay" class="drop-overlay" aria-hidden="true">
-      <div class="drop-card">Drop a Markdown file to open</div>
+      <div class="drop-card">Drop Markdown files to import</div>
     </div>
 
     <!-- Libraries -->
@@ -97,6 +146,7 @@
     <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
     <script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="app.js" defer></script>
   </body>
 </html>

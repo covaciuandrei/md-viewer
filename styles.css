@@ -113,23 +113,270 @@ body {
   border-left: none;
 }
 
-/* Main shell: outline | split */
+/* Main shell: sidebar (files+outline stacked) | split */
 .shell {
   flex: 1;
   display: flex;
   min-height: 0;
 }
-.outline {
+
+/* Shared left sidebar: files on top half, outline on bottom half. */
+.shell-sidebar {
   width: 260px;
   flex-shrink: 0;
-  background: var(--panel-2);
+  display: flex;
+  flex-direction: column;
   border-right: 1px solid var(--border);
+  min-height: 0;
+  background: var(--panel-2);
+}
+body[data-sidebar="off"][data-outline="off"] .shell-sidebar {
+  display: none;
+}
+
+.outline {
+  flex: 1 1 50%;
+  min-height: 0;
   overflow: auto;
   padding: 12px 14px;
   font-size: 13px;
+  background: var(--panel-2);
 }
 body[data-outline="off"] .outline {
   display: none;
+}
+/* When only outline is visible, it takes the full sidebar height. */
+body[data-sidebar="off"] .outline {
+  flex-basis: 100%;
+}
+
+/* Files sidebar */
+.files-panel {
+  flex: 1 1 50%;
+  min-height: 0;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  overflow: auto;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+}
+body[data-sidebar="off"] .files-panel {
+  display: none;
+}
+/* When only files is visible, no separator border + full height. */
+body[data-outline="off"] .files-panel {
+  flex-basis: 100%;
+  border-bottom: none;
+}
+.files-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--panel-2);
+  z-index: 1;
+}
+.files-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+}
+.files-actions {
+  display: inline-flex;
+  gap: 4px;
+}
+.files-actions button {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.files-actions button:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.files-tree {
+  list-style: none;
+  margin: 0;
+  padding: 6px 0;
+  flex: 1;
+}
+.files-tree ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px 3px 8px;
+  cursor: pointer;
+  user-select: none;
+  border-left: 2px solid transparent;
+  color: var(--text);
+  position: relative;
+}
+.tree-row:hover {
+  background: var(--hover);
+}
+.tree-row.is-active {
+  background: var(--hover);
+  border-left-color: var(--accent);
+  color: var(--accent);
+}
+.tree-row.is-drop-target {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+}
+.tree-row.is-renaming {
+  background: var(--panel);
+}
+.tree-toggle {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--muted);
+  padding: 0;
+  width: 14px;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+.tree-icon {
+  width: 14px;
+  flex-shrink: 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+.tree-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 2px;
+  border-radius: 3px;
+  outline: none;
+}
+.tree-label[contenteditable="true"] {
+  background: var(--panel);
+  border: 1px solid var(--accent);
+}
+.tree-actions {
+  display: none;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.tree-row:hover .tree-actions {
+  display: inline-flex;
+}
+.tree-actions button {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 0 4px;
+  border-radius: 3px;
+}
+.tree-actions button:hover {
+  color: var(--accent);
+  background: var(--hover);
+}
+.tree-children {
+  margin: 0;
+  padding: 0;
+}
+.files-tree.is-root-drop-target {
+  background: var(--hover);
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+}
+.files-empty {
+  padding: 12px;
+  color: var(--muted);
+  font-style: italic;
+}
+.files-usage {
+  padding: 6px 12px;
+  font-size: 10px;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  background: var(--panel-2);
+}
+
+/* Tab bar */
+.tab-bar {
+  display: flex;
+  align-items: stretch;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex-shrink: 0;
+  min-height: 32px;
+  scrollbar-width: thin;
+}
+.tab-bar:empty {
+  display: none;
+}
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--border);
+  color: var(--muted);
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  max-width: 200px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.tab:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.tab.is-active {
+  background: var(--panel);
+  color: var(--accent);
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+.tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+.tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.tab-close:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+/* Editor pane: tab bar + textarea stack */
+.pane-editor {
+  flex-direction: column;
 }
 
 .outline-header {
@@ -351,4 +598,56 @@ body[data-layout="preview"] .split {
   padding: 36px 56px;
   font-size: 18px;
   font-weight: 600;
+}
+
+/* Export dropdown */
+.dropdown {
+  position: relative;
+  display: inline-block;
+}
+.dropdown-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 180px;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  z-index: 1100;
+}
+.dropdown-menu[hidden] {
+  display: none;
+}
+.dropdown-menu li {
+  list-style: none;
+}
+.dropdown-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: var(--text);
+  border: none;
+  border-radius: 4px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.dropdown-menu button:hover,
+.dropdown-menu button:focus {
+  background: var(--hover);
+  color: var(--accent);
+  outline: none;
+}
+
+/* Active state for panel-toggle buttons (Files / Outline) */
+#filesBtn.is-active,
+#outlineBtn.is-active {
+  background: var(--hover);
+  border-color: var(--accent);
+  color: var(--accent);
 }

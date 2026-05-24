@@ -9,10 +9,21 @@ declare const mermaid: any;
 declare const docx: any;
 declare const renderMathInElement: any;
 declare const markedFootnote: any;
+declare const JSZip: any;
 
 interface ThemeState {
   pref: string;
   effective: string;
+}
+
+interface FileNode {
+  id: string;
+  type: "file" | "folder";
+  name: string;
+  parentId: string | null;
+  order: number;
+  createdAt: number;
+  updatedAt: number;
 }
 
 (function () {
@@ -24,12 +35,24 @@ interface ThemeState {
   const preview = document.getElementById("preview") as HTMLElement;
   const outlineEl = document.getElementById("outline") as HTMLElement | null;
   const splitter = document.getElementById("splitter") as HTMLElement | null;
-  const clearBtn = document.getElementById("clearBtn");
   const exportBtn = document.getElementById("exportBtn");
   const exportDocxBtn = document.getElementById("exportDocxBtn");
   const exportPdfBtn = document.getElementById("exportPdfBtn");
+  const exportZipBtn = document.getElementById("exportZipBtn");
+  const exportMenuBtn = document.getElementById("exportMenuBtn");
+  const exportMenu = document.getElementById("exportMenu");
   const themeBtn = document.getElementById("themeBtn");
   const outlineBtn = document.getElementById("outlineBtn");
+  const filesBtn = document.getElementById("filesBtn");
+  const newFileBtn = document.getElementById("newFileBtn");
+  const newFolderBtn = document.getElementById("newFolderBtn");
+  const filesTreeEl = document.getElementById(
+    "filesTree",
+  ) as HTMLElement | null;
+  const filesUsageEl = document.getElementById(
+    "filesUsage",
+  ) as HTMLElement | null;
+  const tabBarEl = document.getElementById("tabBar") as HTMLElement | null;
   const layoutSplitBtn = document.getElementById("layoutSplitBtn");
   const layoutEditorBtn = document.getElementById("layoutEditorBtn");
   const layoutPreviewBtn = document.getElementById("layoutPreviewBtn");
@@ -39,7 +62,12 @@ interface ThemeState {
   const dropOverlay = document.getElementById("dropOverlay");
 
   // ---- Constants ----
-  const STORAGE_KEY = "md-viewer:content";
+  const STORAGE_KEY = "md-viewer:content"; // legacy single-doc key (migration only)
+  const FILES_KEY = "md-viewer:files";
+  const DOC_PREFIX = "md-viewer:doc:";
+  const EXPANDED_KEY = "md-viewer:folders:expanded";
+  const SIDEBAR_KEY = "md-viewer:sidebar";
+  const NODE_MIME = "application/x-md-viewer-node";
   const THEME_KEY = "md-viewer:theme";
   const LAYOUT_KEY = "md-viewer:layout";
   const SPLIT_KEY = "md-viewer:split";
@@ -297,19 +325,334 @@ interface ThemeState {
   editor.addEventListener("scroll", () => syncScroll(editor, preview));
   preview.addEventListener("scroll", () => syncScroll(preview, editor));
 
-  // ---- Persistence ----
-  function loadFromStorage(): void {
+  // ---- Persistence (multi-file via FilesStore) ----
+  interface FilesState {
+    nodes: FileNode[];
+    activeId: string | null;
+    openIds: string[];
+    version: number;
+  }
+
+  function genId(): string {
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  }
+
+  function safeGet(k: string): string | null {
     try {
-      const saved = w.localStorage && w.localStorage.getItem(STORAGE_KEY);
-      if (saved !== null && saved !== undefined) editor.value = saved;
+      return (w.localStorage && w.localStorage.getItem(k)) || null;
+    } catch (_) {
+      return null;
+    }
+  }
+  function safeSet(k: string, v: string): boolean {
+    try {
+      if (!w.localStorage) return false;
+      w.localStorage.setItem(k, v);
+      return true;
+    } catch (e: any) {
+      if (
+        e &&
+        (e.name === "QuotaExceededError" || e.code === 22 || e.code === 1014)
+      ) {
+        try {
+          if (filesUsageEl)
+            filesUsageEl.textContent =
+              "Storage full — delete files or shrink content.";
+        } catch (_) {}
+      }
+      return false;
+    }
+  }
+  function safeRemove(k: string): void {
+    try {
+      if (w.localStorage) w.localStorage.removeItem(k);
     } catch (_) {}
+  }
+
+  function defaultState(): FilesState {
+    return { nodes: [], activeId: null, openIds: [], version: 1 };
+  }
+
+  function loadState(): FilesState {
+    const raw = safeGet(FILES_KEY);
+    if (raw) {
+      try {
+        const s = JSON.parse(raw);
+        if (s && Array.isArray(s.nodes)) {
+          return {
+            nodes: s.nodes,
+            activeId: s.activeId || null,
+            openIds: Array.isArray(s.openIds) ? s.openIds : [],
+            version: s.version || 1,
+          };
+        }
+      } catch (_) {}
+    }
+    return defaultState();
+  }
+
+  function saveState(s: FilesState): void {
+    safeSet(FILES_KEY, JSON.stringify(s));
+  }
+
+  let state: FilesState = loadState();
+
+  function findNode(id: string | null): FileNode | undefined {
+    if (!id) return undefined;
+    return state.nodes.find((n) => n.id === id);
+  }
+
+  function childrenOf(parentId: string | null): FileNode[] {
+    return state.nodes
+      .filter((n) => n.parentId === parentId)
+      .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+  }
+
+  function uniqueName(
+    name: string,
+    parentId: string | null,
+    ignoreId?: string,
+  ): string {
+    const siblings = state.nodes.filter(
+      (n) => n.parentId === parentId && n.id !== ignoreId,
+    );
+    const taken = new Set(siblings.map((n) => n.name.toLowerCase()));
+    if (!taken.has(name.toLowerCase())) return name;
+    const m = name.match(/^(.*?)(?:\s\((\d+)\))?(\.[^.]+)?$/);
+    const base = (m && m[1]) || name;
+    const ext = (m && m[3]) || "";
+    let i = 2;
+    while (taken.has((base + " (" + i + ")" + ext).toLowerCase())) i++;
+    return base + " (" + i + ")" + ext;
+  }
+
+  function maxOrder(parentId: string | null): number {
+    const sibs = state.nodes.filter((n) => n.parentId === parentId);
+    return sibs.reduce((m, n) => Math.max(m, n.order), 0);
+  }
+
+  function createFile(
+    name: string,
+    parentId: string | null,
+    content: string,
+  ): FileNode {
+    const id = genId();
+    const node: FileNode = {
+      id,
+      type: "file",
+      name: uniqueName(name, parentId),
+      parentId,
+      order: maxOrder(parentId) + 1,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    state.nodes.push(node);
+    safeSet(DOC_PREFIX + id, content || "");
+    saveState(state);
+    return node;
+  }
+
+  function createFolder(name: string, parentId: string | null): FileNode {
+    const id = genId();
+    const node: FileNode = {
+      id,
+      type: "folder",
+      name: uniqueName(name, parentId),
+      parentId,
+      order: maxOrder(parentId) + 1,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    state.nodes.push(node);
+    saveState(state);
+    return node;
+  }
+
+  function renameNode(id: string, name: string): void {
+    const n = findNode(id);
+    if (!n) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    n.name = uniqueName(trimmed, n.parentId, id);
+    n.updatedAt = Date.now();
+    saveState(state);
+  }
+
+  function descendantIds(id: string): string[] {
+    const out: string[] = [];
+    const stack = [id];
+    while (stack.length) {
+      const cur = stack.pop()!;
+      for (const n of state.nodes) {
+        if (n.parentId === cur) {
+          out.push(n.id);
+          if (n.type === "folder") stack.push(n.id);
+        }
+      }
+    }
+    return out;
+  }
+
+  function removeNode(id: string): void {
+    const n = findNode(id);
+    if (!n) return;
+    const ids = [id, ...descendantIds(id)];
+    state.nodes = state.nodes.filter((x) => ids.indexOf(x.id) === -1);
+    state.openIds = state.openIds.filter((x) => ids.indexOf(x) === -1);
+    ids.forEach((x) => safeRemove(DOC_PREFIX + x));
+    if (state.activeId && ids.indexOf(state.activeId) !== -1) {
+      state.activeId = state.openIds[state.openIds.length - 1] || null;
+    }
+    saveState(state);
+  }
+
+  function moveNode(id: string, newParentId: string | null): boolean {
+    const n = findNode(id);
+    if (!n) return false;
+    if (id === newParentId) return false;
+    if (n.type === "folder") {
+      // cycle guard
+      const desc = descendantIds(id);
+      if (newParentId && desc.indexOf(newParentId) !== -1) return false;
+    }
+    if (newParentId !== null) {
+      const target = findNode(newParentId);
+      if (!target || target.type !== "folder") return false;
+    }
+    n.parentId = newParentId;
+    n.order = maxOrder(newParentId) + 1;
+    n.name = uniqueName(n.name, newParentId, id);
+    n.updatedAt = Date.now();
+    saveState(state);
+    return true;
+  }
+
+  function readDoc(id: string): string {
+    return safeGet(DOC_PREFIX + id) || "";
+  }
+  function writeDoc(id: string, text: string): void {
+    safeSet(DOC_PREFIX + id, text);
+    const n = findNode(id);
+    if (n) {
+      n.updatedAt = Date.now();
+    }
+  }
+
+  function openFile(id: string): void {
+    if (state.openIds.indexOf(id) === -1) state.openIds.push(id);
+  }
+  function closeFile(id: string): void {
+    state.openIds = state.openIds.filter((x) => x !== id);
+    if (state.activeId === id) {
+      state.activeId = state.openIds[state.openIds.length - 1] || null;
+    }
+    saveState(state);
+  }
+
+  // ---- Expanded folders ----
+  function loadExpanded(): Set<string> {
+    try {
+      const raw = safeGet(EXPANDED_KEY);
+      if (raw) return new Set(JSON.parse(raw));
+    } catch (_) {}
+    return new Set();
+  }
+  function saveExpanded(): void {
+    try {
+      safeSet(EXPANDED_KEY, JSON.stringify(Array.from(expanded)));
+    } catch (_) {}
+  }
+  const expanded = loadExpanded();
+
+  // ---- Migration from legacy single-doc key ----
+  function migrateLegacy(): void {
+    const legacy = safeGet(STORAGE_KEY);
+    if (legacy !== null && state.nodes.length === 0) {
+      const f = createFile("Untitled.md", null, legacy);
+      state.activeId = f.id;
+      openFile(f.id);
+      saveState(state);
+      safeRemove(STORAGE_KEY);
+    }
+  }
+
+  function ensureAtLeastOneFile(): void {
+    if (state.nodes.filter((n) => n.type === "file").length === 0) {
+      const f = createFile("Untitled.md", null, "");
+      state.activeId = f.id;
+      openFile(f.id);
+      saveState(state);
+    } else if (!state.activeId || !findNode(state.activeId)) {
+      const first = state.nodes.find((n) => n.type === "file");
+      if (first) {
+        state.activeId = first.id;
+        openFile(first.id);
+        saveState(state);
+      }
+    } else if (state.openIds.indexOf(state.activeId) === -1) {
+      openFile(state.activeId);
+      saveState(state);
+    }
+  }
+
+  // ---- Active file <-> editor ----
+  function loadActiveIntoEditor(): void {
+    if (!state.activeId) {
+      editor.value = "";
+      return;
+    }
+    editor.value = readDoc(state.activeId);
+  }
+  function saveEditorToActive(): void {
+    if (!state.activeId) return;
+    writeDoc(state.activeId, editor.value);
+  }
+
+  function setActive(id: string): void {
+    if (!findNode(id)) return;
+    if (state.activeId === id) return;
+    saveEditorToActive();
+    state.activeId = id;
+    openFile(id);
+    saveState(state);
+    loadActiveIntoEditor();
+    render();
+    renderTabs();
+    renderTree();
+  }
+
+  // ---- Storage usage indicator ----
+  function updateUsage(): void {
+    if (!filesUsageEl) return;
+    try {
+      let bytes = 0;
+      if (w.localStorage) {
+        for (let i = 0; i < w.localStorage.length; i++) {
+          const k = w.localStorage.key(i) || "";
+          if (k.indexOf("md-viewer:") !== 0) continue;
+          const v = w.localStorage.getItem(k) || "";
+          bytes += k.length + v.length;
+        }
+      }
+      const fileCount = state.nodes.filter((n) => n.type === "file").length;
+      const kb = (bytes / 1024).toFixed(1);
+      filesUsageEl.textContent =
+        fileCount + " file" + (fileCount === 1 ? "" : "s") + " · " + kb + " KB";
+    } catch (_) {}
+  }
+
+  // Legacy storage helpers kept as no-ops for back-compat with tests/window API.
+  function loadFromStorage(): void {
+    loadActiveIntoEditor();
   }
   function saveToStorage(): void {
-    try {
-      if (w.localStorage) w.localStorage.setItem(STORAGE_KEY, editor.value);
-    } catch (_) {}
+    saveEditorToActive();
+    updateUsage();
   }
   w.__mdStorageKey = STORAGE_KEY;
+  w.__mdFilesKey = FILES_KEY;
+  w.__mdDocPrefix = DOC_PREFIX;
+  w.__mdFilesState = () => state;
 
   // ---- Theme (Phase 6) ----
   function readStoredTheme(): string {
@@ -469,6 +812,7 @@ interface ThemeState {
   // ---- Outline toggle ----
   function setOutlineVisible(visible: boolean): void {
     document.body.setAttribute("data-outline", visible ? "on" : "off");
+    if (outlineBtn) outlineBtn.classList.toggle("is-active", visible);
     try {
       if (w.localStorage)
         w.localStorage.setItem(OUTLINE_KEY, visible ? "on" : "off");
@@ -481,13 +825,450 @@ interface ThemeState {
       setOutlineVisible(!cur);
     });
 
-  // ---- Drag and drop .md (Phase 16) ----
+  // ---- Sidebar (files panel) toggle ----
+  function setSidebarVisible(visible: boolean): void {
+    document.body.setAttribute("data-sidebar", visible ? "on" : "off");
+    if (filesBtn) filesBtn.classList.toggle("is-active", visible);
+    safeSet(SIDEBAR_KEY, visible ? "on" : "off");
+  }
+  w.__mdSetSidebar = setSidebarVisible;
+  if (filesBtn)
+    filesBtn.addEventListener("click", () => {
+      const cur = document.body.getAttribute("data-sidebar") !== "off";
+      setSidebarVisible(!cur);
+    });
+
+  // ---- Tab bar ----
+  function renderTabs(): void {
+    if (!tabBarEl) return;
+    tabBarEl.innerHTML = "";
+    state.openIds.forEach((id) => {
+      const node = findNode(id);
+      if (!node) return;
+      const tab = document.createElement("button");
+      tab.type = "button";
+      tab.className = "tab" + (id === state.activeId ? " is-active" : "");
+      tab.setAttribute("data-id", id);
+      tab.setAttribute("role", "tab");
+      tab.title = node.name;
+      const label = document.createElement("span");
+      label.className = "tab-label";
+      label.textContent = node.name;
+      const close = document.createElement("span");
+      close.className = "tab-close";
+      close.textContent = "×";
+      close.title = "Close";
+      close.addEventListener("click", (e) => {
+        e.stopPropagation();
+        closeTab(id);
+      });
+      tab.appendChild(label);
+      tab.appendChild(close);
+      tab.addEventListener("click", () => setActive(id));
+      tab.addEventListener("mousedown", (e) => {
+        if (e.button === 1) {
+          e.preventDefault();
+          closeTab(id);
+        }
+      });
+      tabBarEl.appendChild(tab);
+    });
+  }
+
+  function closeTab(id: string): void {
+    const wasActive = state.activeId === id;
+    closeFile(id);
+    if (state.openIds.length === 0) {
+      ensureAtLeastOneFile();
+    }
+    if (wasActive && state.activeId) {
+      loadActiveIntoEditor();
+      render();
+    }
+    renderTabs();
+    renderTree();
+  }
+
+  w.__mdRenderTabs = renderTabs;
+  w.__mdCloseTab = closeTab;
+
+  // ---- Files tree ----
+  function renderTree(): void {
+    if (!filesTreeEl) return;
+    filesTreeEl.innerHTML = "";
+    const roots = childrenOf(null);
+    if (roots.length === 0) {
+      const empty = document.createElement("li");
+      empty.className = "files-empty";
+      empty.textContent = "No files yet";
+      filesTreeEl.appendChild(empty);
+    } else {
+      roots.forEach((n) => filesTreeEl.appendChild(renderNode(n, 0)));
+    }
+  }
+
+  function renderNode(node: FileNode, depth: number): HTMLLIElement {
+    const li = document.createElement("li");
+    li.className =
+      "tree-node " + (node.type === "folder" ? "folder-node" : "file-node");
+    li.setAttribute("data-id", node.id);
+
+    const row = document.createElement("div");
+    row.className = "tree-row";
+    if (node.id === state.activeId) row.classList.add("is-active");
+    row.style.paddingLeft = 8 + depth * 12 + "px";
+    row.setAttribute("draggable", "true");
+    row.setAttribute("tabindex", "0");
+
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "tree-toggle";
+    if (node.type === "folder") {
+      const isOpen = expanded.has(node.id);
+      toggle.textContent = isOpen ? "▾" : "▸";
+      toggle.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (expanded.has(node.id)) expanded.delete(node.id);
+        else expanded.add(node.id);
+        saveExpanded();
+        renderTree();
+      });
+    } else {
+      toggle.textContent = "";
+      toggle.style.visibility = "hidden";
+    }
+    row.appendChild(toggle);
+
+    const icon = document.createElement("span");
+    icon.className = "tree-icon";
+    icon.textContent = node.type === "folder" ? "📁" : "📄";
+    row.appendChild(icon);
+
+    const label = document.createElement("span");
+    label.className = "tree-label";
+    label.textContent = node.name;
+    row.appendChild(label);
+
+    const actions = document.createElement("span");
+    actions.className = "tree-actions";
+    const renameBtn = document.createElement("button");
+    renameBtn.type = "button";
+    renameBtn.title = "Rename";
+    renameBtn.textContent = "✎";
+    renameBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      startRename(label, node);
+    });
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.title = "Delete";
+    delBtn.textContent = "🗑";
+    delBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      confirmDelete(node);
+    });
+    actions.appendChild(renameBtn);
+    actions.appendChild(delBtn);
+    row.appendChild(actions);
+
+    row.addEventListener("click", () => {
+      if (node.type === "folder") {
+        if (expanded.has(node.id)) expanded.delete(node.id);
+        else expanded.add(node.id);
+        saveExpanded();
+        renderTree();
+      } else {
+        setActive(node.id);
+      }
+    });
+    row.addEventListener("dblclick", (e) => {
+      e.preventDefault();
+      startRename(label, node);
+    });
+    row.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key === "F2") {
+        e.preventDefault();
+        startRename(label, node);
+      } else if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        confirmDelete(node);
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        if (node.type === "file") setActive(node.id);
+      }
+    });
+
+    // Internal DnD
+    row.addEventListener("dragstart", (e: DragEvent) => {
+      if (!e.dataTransfer) return;
+      try {
+        e.dataTransfer.setData(NODE_MIME, node.id);
+        e.dataTransfer.setData("text/plain", node.id);
+      } catch (_) {}
+      e.dataTransfer.effectAllowed = "move";
+    });
+
+    li.appendChild(row);
+
+    if (node.type === "folder" && expanded.has(node.id)) {
+      const ul = document.createElement("ul");
+      ul.className = "tree-children";
+      childrenOf(node.id).forEach((c) =>
+        ul.appendChild(renderNode(c, depth + 1)),
+      );
+      li.appendChild(ul);
+    }
+
+    // Folder-wide drop zone: drop anywhere inside the folder's <li>
+    // (header row OR children area) targets this folder. stopPropagation
+    // lets nested folders take precedence over their parent.
+    if (node.type === "folder") {
+      li.addEventListener("dragover", (e: DragEvent) => {
+        if (!e.dataTransfer || !hasNodeMime(e)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = "move";
+        row.classList.add("is-drop-target");
+      });
+      li.addEventListener("dragleave", (e: DragEvent) => {
+        // Only clear when the pointer truly leaves this li (relatedTarget
+        // outside), to avoid flicker when moving between child elements.
+        const to = e.relatedTarget as Node | null;
+        if (to && li.contains(to)) return;
+        row.classList.remove("is-drop-target");
+      });
+      li.addEventListener("drop", (e: DragEvent) => {
+        if (!e.dataTransfer || !hasNodeMime(e)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        row.classList.remove("is-drop-target");
+        const id =
+          e.dataTransfer.getData(NODE_MIME) ||
+          e.dataTransfer.getData("text/plain");
+        if (!id) return;
+        if (moveNode(id, node.id)) {
+          if (!expanded.has(node.id)) {
+            expanded.add(node.id);
+            saveExpanded();
+          }
+          renderTree();
+        }
+      });
+    }
+    return li;
+  }
+
+  function hasNodeMime(e: DragEvent): boolean {
+    if (!e.dataTransfer || !e.dataTransfer.types) return false;
+    const types = Array.from(e.dataTransfer.types);
+    return types.indexOf(NODE_MIME) !== -1;
+  }
+
+  function startRename(labelEl: HTMLElement, node: FileNode): void {
+    const row = labelEl.parentElement;
+    if (row) row.classList.add("is-renaming");
+    labelEl.setAttribute("contenteditable", "true");
+    labelEl.focus();
+    const range = document.createRange();
+    range.selectNodeContents(labelEl);
+    const sel = window.getSelection();
+    if (sel) {
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+    const finish = (commit: boolean) => {
+      labelEl.removeAttribute("contenteditable");
+      if (row) row.classList.remove("is-renaming");
+      labelEl.removeEventListener("keydown", onKey);
+      labelEl.removeEventListener("blur", onBlur);
+      if (commit) {
+        const newName = (labelEl.textContent || "").trim();
+        if (newName && newName !== node.name) {
+          renameNode(node.id, newName);
+        }
+      }
+      renderTree();
+      renderTabs();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        finish(true);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        labelEl.textContent = node.name;
+        finish(false);
+      }
+    };
+    const onBlur = () => finish(true);
+    labelEl.addEventListener("keydown", onKey);
+    labelEl.addEventListener("blur", onBlur);
+  }
+
+  function confirmDelete(node: FileNode): void {
+    const isFolder = node.type === "folder";
+    const kids = isFolder ? descendantIds(node.id).length : 0;
+    const msg = isFolder
+      ? 'Delete folder "' +
+        node.name +
+        '"' +
+        (kids ? " and " + kids + " item(s) inside?" : "?")
+      : 'Delete "' + node.name + '"?';
+    let ok = true;
+    try {
+      ok = window.confirm(msg);
+    } catch (_) {}
+    if (!ok) return;
+    const wasActive = node.id === state.activeId;
+    removeNode(node.id);
+    if (wasActive || !state.activeId) {
+      ensureAtLeastOneFile();
+      loadActiveIntoEditor();
+      render();
+    }
+    renderTabs();
+    renderTree();
+    updateUsage();
+  }
+
+  function targetParentForNew(): string | null {
+    // Create new items inside the active file's folder when possible.
+    const active = findNode(state.activeId);
+    if (!active) return null;
+    if (active.type === "folder") return active.id;
+    return active.parentId;
+  }
+
+  function promptNewFile(): void {
+    let name = "Untitled.md";
+    try {
+      const v = window.prompt("New file name", name);
+      if (v === null) return;
+      if (v.trim()) name = v.trim();
+    } catch (_) {}
+    if (!/\.[a-z0-9]+$/i.test(name)) name += ".md";
+    const parent = targetParentForNew();
+    const f = createFile(name, parent, "");
+    if (parent) {
+      expanded.add(parent);
+      saveExpanded();
+    }
+    openFile(f.id);
+    saveEditorToActive();
+    state.activeId = f.id;
+    saveState(state);
+    loadActiveIntoEditor();
+    render();
+    renderTabs();
+    renderTree();
+    updateUsage();
+  }
+
+  function promptNewFolder(): void {
+    let name = "New folder";
+    try {
+      const v = window.prompt("New folder name", name);
+      if (v === null) return;
+      if (v.trim()) name = v.trim();
+    } catch (_) {}
+    const parent = targetParentForNew();
+    createFolder(name, parent);
+    if (parent) {
+      expanded.add(parent);
+      saveExpanded();
+    }
+    renderTree();
+    updateUsage();
+  }
+
+  if (newFileBtn) newFileBtn.addEventListener("click", promptNewFile);
+  if (newFolderBtn) newFolderBtn.addEventListener("click", promptNewFolder);
+
+  w.__mdRenderTree = renderTree;
+  w.__mdNewFile = promptNewFile;
+  w.__mdNewFolder = promptNewFolder;
+  w.__mdSetActive = setActive;
+  w.__mdMoveNode = moveNode;
+  w.__mdRemoveNode = (id: string) => {
+    const n = findNode(id);
+    if (!n) return;
+    removeNode(id);
+    if (!state.activeId) {
+      ensureAtLeastOneFile();
+      loadActiveIntoEditor();
+      render();
+    }
+    renderTabs();
+    renderTree();
+    updateUsage();
+  };
+
+  // Files-tree root drop target (move to root)
+  if (filesTreeEl) {
+    filesTreeEl.addEventListener("dragover", (e: DragEvent) => {
+      if (hasNodeMime(e)) {
+        e.preventDefault();
+        if (e.target === filesTreeEl) {
+          filesTreeEl.classList.add("is-root-drop-target");
+        }
+      }
+    });
+    filesTreeEl.addEventListener("dragleave", (e: DragEvent) => {
+      if (e.target === filesTreeEl)
+        filesTreeEl.classList.remove("is-root-drop-target");
+    });
+    filesTreeEl.addEventListener("drop", (e: DragEvent) => {
+      filesTreeEl.classList.remove("is-root-drop-target");
+      if (!e.dataTransfer) return;
+      const id =
+        e.dataTransfer.getData(NODE_MIME) ||
+        e.dataTransfer.getData("text/plain");
+      if (!id) return;
+      // Only treat as root-move if dropped directly on the list background.
+      if (e.target !== filesTreeEl) return;
+      e.preventDefault();
+      if (moveNode(id, null)) renderTree();
+    });
+  }
+
+  // ---- Keyboard shortcuts (tabs + new file) ----
+  document.addEventListener("keydown", (e: KeyboardEvent) => {
+    const mod = e.ctrlKey || e.metaKey;
+    if (!mod) return;
+    if (e.key === "Tab") {
+      if (state.openIds.length < 2) return;
+      e.preventDefault();
+      const idx = state.activeId ? state.openIds.indexOf(state.activeId) : -1;
+      const len = state.openIds.length;
+      const next = e.shiftKey ? (idx - 1 + len) % len : (idx + 1) % len;
+      setActive(state.openIds[next]);
+    } else if (e.key === "w" || e.key === "W") {
+      if (!state.activeId) return;
+      e.preventDefault();
+      closeTab(state.activeId);
+    } else if (e.key === "n" || e.key === "N") {
+      e.preventDefault();
+      promptNewFile();
+    }
+  });
+
+  // ---- Drag and drop .md (multi-file import) ----
   function loadFileText(text: string): void {
+    // Backward-compat: load text into the active file's editor.
     editor.value = text;
     saveToStorage();
     render();
   }
   w.__mdLoadFileText = loadFileText;
+
+  function importTextAsFile(
+    name: string,
+    text: string,
+    parentId: string | null,
+  ): FileNode {
+    return createFile(name || "Untitled.md", parentId, text);
+  }
+  w.__mdImportFile = importTextAsFile;
 
   function setupDragDrop(): void {
     let depth = 0;
@@ -497,35 +1278,102 @@ interface ThemeState {
     const hide = () => {
       if (dropOverlay) dropOverlay.classList.remove("is-active");
     };
-    const isFileDrag = (e: DragEvent) =>
-      !!(
-        e.dataTransfer &&
-        Array.from(e.dataTransfer.types || []).indexOf("Files") !== -1
-      );
+    const isExternalFileDrag = (e: DragEvent) => {
+      if (!e.dataTransfer) return false;
+      const types = Array.from(e.dataTransfer.types || []);
+      if (types.indexOf("Files") === -1) return false;
+      // Ignore internal node drags (they also carry Files=false typically, but be defensive).
+      if (types.indexOf(NODE_MIME) !== -1) return false;
+      return true;
+    };
 
     window.addEventListener("dragenter", (e: DragEvent) => {
-      if (!isFileDrag(e)) return;
+      if (!isExternalFileDrag(e)) return;
       depth++;
       show();
       e.preventDefault();
     });
     window.addEventListener("dragover", (e: DragEvent) => {
-      if (isFileDrag(e)) e.preventDefault();
+      if (isExternalFileDrag(e)) e.preventDefault();
     });
     window.addEventListener("dragleave", () => {
       depth = Math.max(0, depth - 1);
       if (depth === 0) hide();
     });
     window.addEventListener("drop", (e: DragEvent) => {
-      e.preventDefault();
       depth = 0;
       hide();
       const dt = e.dataTransfer;
-      if (!dt || !dt.files || dt.files.length === 0) return;
-      const file = dt.files[0];
-      const reader = new FileReader();
-      reader.onload = () => loadFileText(String(reader.result || ""));
-      reader.readAsText(file);
+      if (!dt) return;
+      // If this is an internal node drag, let tree handlers deal with it.
+      const types = Array.from(dt.types || []);
+      if (types.indexOf(NODE_MIME) !== -1) return;
+      if (!dt.files || dt.files.length === 0) return;
+      e.preventDefault();
+
+      // Determine drop target folder by walking up the DOM from e.target.
+      let parentId: string | null = null;
+      let el: HTMLElement | null = e.target as HTMLElement | null;
+      while (el && el !== document.body) {
+        if (el.classList && el.classList.contains("tree-node")) {
+          const id = el.getAttribute("data-id");
+          const n = id ? findNode(id) : null;
+          if (n) {
+            parentId = n.type === "folder" ? n.id : n.parentId;
+          }
+          break;
+        }
+        el = el.parentElement;
+      }
+
+      const files = Array.from(dt.files);
+      const accepted = files.filter((f) => {
+        const name = (f.name || "").toLowerCase();
+        return (
+          name.endsWith(".md") ||
+          name.endsWith(".markdown") ||
+          name.endsWith(".txt") ||
+          (f.type && f.type.indexOf("text") === 0)
+        );
+      });
+      if (accepted.length === 0) {
+        try {
+          console.warn("md-viewer: no markdown/text files in drop");
+        } catch (_) {}
+        return;
+      }
+
+      let firstId: string | null = null;
+      let remaining = accepted.length;
+      accepted.forEach((file) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const text = String(reader.result || "");
+          const node = importTextAsFile(file.name, text, parentId);
+          openFile(node.id);
+          if (!firstId) firstId = node.id;
+          remaining--;
+          if (remaining === 0) {
+            saveEditorToActive();
+            state.activeId = firstId;
+            saveState(state);
+            loadActiveIntoEditor();
+            if (parentId) {
+              expanded.add(parentId);
+              saveExpanded();
+            }
+            render();
+            renderTabs();
+            renderTree();
+            updateUsage();
+          }
+        };
+        try {
+          reader.readAsText(file);
+        } catch (_) {
+          remaining--;
+        }
+      });
     });
   }
   setupDragDrop();
@@ -533,18 +1381,95 @@ interface ThemeState {
   // ---- Utilities ----
   function clearAll(): void {
     editor.value = "";
-    try {
-      if (w.localStorage) w.localStorage.removeItem(STORAGE_KEY);
-    } catch (_) {}
+    if (state.activeId) writeDoc(state.activeId, "");
     render();
+    updateUsage();
   }
   function exportMd(): void {
-    triggerDownload(editor.value, "document.md", "text/markdown;charset=utf-8");
+    const active = findNode(state.activeId);
+    const name = active ? active.name : "document.md";
+    triggerDownload(editor.value, name, "text/markdown;charset=utf-8");
   }
   w.__mdClear = clearAll;
   w.__mdExport = exportMd;
-  if (clearBtn) clearBtn.addEventListener("click", clearAll);
   if (exportBtn) exportBtn.addEventListener("click", exportMd);
+
+  // ---- ZIP export of all files ----
+  function pathFor(node: FileNode): string {
+    const parts: string[] = [node.name];
+    let cur: FileNode | undefined = node;
+    while (cur && cur.parentId) {
+      const p = findNode(cur.parentId);
+      if (!p) break;
+      parts.unshift(p.name);
+      cur = p;
+    }
+    return parts.join("/");
+  }
+  function exportZip(): Promise<void> {
+    if (typeof JSZip === "undefined" || !JSZip) {
+      try {
+        alert("JSZip not loaded.");
+      } catch (_) {}
+      return Promise.reject(new Error("JSZip not loaded"));
+    }
+    saveEditorToActive();
+    const zip = new JSZip();
+    state.nodes.forEach((n) => {
+      if (n.type === "folder") {
+        zip.folder(pathFor(n));
+      } else {
+        zip.file(pathFor(n), readDoc(n.id));
+      }
+    });
+    return zip.generateAsync({ type: "blob" }).then((blob: Blob) => {
+      triggerBlobDownload(blob, "md-viewer-export.zip");
+    });
+  }
+  w.__mdExportZip = exportZip;
+  if (exportZipBtn) exportZipBtn.addEventListener("click", () => exportZip());
+
+  // ---- Export dropdown menu ----
+  function setExportMenuOpen(open: boolean): void {
+    if (!exportMenu || !exportMenuBtn) return;
+    if (open) {
+      exportMenu.removeAttribute("hidden");
+      exportMenuBtn.setAttribute("aria-expanded", "true");
+    } else {
+      exportMenu.setAttribute("hidden", "");
+      exportMenuBtn.setAttribute("aria-expanded", "false");
+    }
+  }
+  if (exportMenuBtn && exportMenu) {
+    exportMenuBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const isOpen = !exportMenu.hasAttribute("hidden");
+      setExportMenuOpen(!isOpen);
+    });
+    exportMenu.addEventListener("click", (e) => {
+      const target = e.target as HTMLElement;
+      if (target && target.tagName === "BUTTON") {
+        setExportMenuOpen(false);
+      }
+    });
+    document.addEventListener("click", (e) => {
+      if (exportMenu.hasAttribute("hidden")) return;
+      const t = e.target as Node | null;
+      if (
+        t &&
+        exportMenu.contains(t) === false &&
+        exportMenuBtn.contains(t) === false
+      ) {
+        setExportMenuOpen(false);
+      }
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !exportMenu.hasAttribute("hidden")) {
+        setExportMenuOpen(false);
+        exportMenuBtn.focus();
+      }
+    });
+  }
 
   function triggerDownload(
     content: BlobPart,
@@ -793,7 +1718,15 @@ interface ThemeState {
   } catch (_) {
     setOutlineVisible(true);
   }
+  // Sidebar default on, persisted toggle
+  const sidebarPref = safeGet(SIDEBAR_KEY);
+  setSidebarVisible(sidebarPref !== "off");
 
-  loadFromStorage();
+  migrateLegacy();
+  ensureAtLeastOneFile();
+  loadActiveIntoEditor();
   render();
+  renderTabs();
+  renderTree();
+  updateUsage();
 })();

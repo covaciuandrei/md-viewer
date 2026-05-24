@@ -13,7 +13,7 @@ const html = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
 const appSrc = fs.readFileSync(path.join(ROOT, "app.js"), "utf8");
 const cssSrc = fs.readFileSync(path.join(ROOT, "styles.css"), "utf8");
 
-const PHASE = parseInt(process.env.PHASE || "17", 10);
+const PHASE = parseInt(process.env.PHASE || "18", 10);
 
 let passes = 0,
   fails = 0;
@@ -297,21 +297,26 @@ function makeDocxStub(BlobCtor) {
 
     editor.value = "hello world";
     editor.dispatchEvent(new window.Event("input", { bubbles: true }));
+    // After multi-file migration, legacy key is gone and content is stored
+    // under md-viewer:doc:<id> for the migrated "Untitled.md".
+    const activeId = window.__mdFilesState().activeId;
     assert(
-      storage.getItem("md-viewer:content") === "hello world",
+      storage.getItem("md-viewer:doc:" + activeId) === "hello world",
       "input saved",
     );
 
     window.__mdClear();
     assert(
-      editor.value === "" && storage.getItem("md-viewer:content") === null,
+      editor.value === "" &&
+        storage.getItem("md-viewer:doc:" + activeId) === "",
       "clear() wipes editor + storage",
     );
 
     editor.value = "# Exported";
     const cap = captureDownload(window, document);
     window.__mdExport();
-    assert(cap.name === "document.md", ".md export filename");
+    // Filename now reflects the active file's name (migrated "Untitled.md").
+    assert(cap.name === "Untitled.md", ".md export filename");
   }
 
   // ---------- PHASE 6 ----------
@@ -736,6 +741,269 @@ function makeDocxStub(BlobCtor) {
       /DOCXSTUB:/.test(cap.content),
       "Packer.toBlob() produced the file content",
     );
+  }
+
+  // ---------- PHASE 18: Multi-file (sidebar + tabs + DnD + folders + zip) ----
+  if (PHASE >= 18) {
+    console.log("\n[Phase 18] multi-file support");
+
+    // 1) Migration of legacy md-viewer:content -> Untitled.md
+    {
+      const storage = makeMemoryStorage({
+        "md-viewer:content": "# Legacy",
+      });
+      const { window, document } = buildDom({ debounce: 0, storage });
+      const st = window.__mdFilesState();
+      assert(st.nodes.length === 1, "migration created one file");
+      assert(
+        st.nodes[0].name === "Untitled.md",
+        "migrated file named Untitled.md",
+      );
+      assert(
+        storage.getItem("md-viewer:content") === null,
+        "legacy key removed after migration",
+      );
+      const editor = document.querySelector("#editor");
+      assert(
+        editor.value === "# Legacy",
+        "migrated content loaded into editor",
+      );
+      assert(st.activeId === st.nodes[0].id, "migrated file set as active");
+      assert(
+        st.openIds.indexOf(st.activeId) !== -1,
+        "migrated file is open in a tab",
+      );
+      assert(
+        !!document.querySelector("#tabBar .tab.is-active"),
+        "active tab rendered",
+      );
+      assert(!!document.querySelector("#filesPanel"), "files sidebar exists");
+      assert(
+        document.body.getAttribute("data-sidebar") === "on",
+        "sidebar visible by default",
+      );
+    }
+
+    // 2) Create / rename / delete + tabs follow
+    {
+      const storage = makeMemoryStorage();
+      const { window, document } = buildDom({ debounce: 0, storage });
+      // ensureAtLeastOneFile auto-creates Untitled.md
+      let st = window.__mdFilesState();
+      const firstId = st.activeId;
+      assert(!!firstId, "auto-created initial file");
+
+      // Stub prompt for new-file dialog
+      window.prompt = () => "notes.md";
+      window.__mdNewFile();
+      st = window.__mdFilesState();
+      assert(st.nodes.length === 2, "second file created");
+      const secondId = st.activeId;
+      assert(secondId !== firstId, "new file became active");
+      assert(st.openIds.indexOf(secondId) !== -1, "new file opened in tab");
+      const tabs = document.querySelectorAll("#tabBar .tab");
+      assert(tabs.length === 2, "two tabs rendered");
+
+      // Switch back to first
+      window.__mdSetActive(firstId);
+      st = window.__mdFilesState();
+      assert(st.activeId === firstId, "setActive switched back");
+
+      // Edit, then switch and switch back: content preserved per file
+      const editor = document.querySelector("#editor");
+      editor.value = "first content";
+      editor.dispatchEvent(new window.Event("input", { bubbles: true }));
+      window.__mdSetActive(secondId);
+      assert(editor.value === "", "second file editor is empty");
+      editor.value = "second content";
+      editor.dispatchEvent(new window.Event("input", { bubbles: true }));
+      window.__mdSetActive(firstId);
+      assert(editor.value === "first content", "first file content preserved");
+
+      // Delete second file (confirm=true)
+      window.confirm = () => true;
+      window.__mdRemoveNode(secondId);
+      st = window.__mdFilesState();
+      assert(
+        !st.nodes.find((n) => n.id === secondId),
+        "second file removed from tree",
+      );
+      assert(
+        st.openIds.indexOf(secondId) === -1,
+        "second file removed from tabs",
+      );
+      assert(
+        storage.getItem("md-viewer:doc:" + secondId) === null,
+        "second file's doc key removed",
+      );
+    }
+
+    // 3) Folders + nesting + recursive delete + cycle guard
+    {
+      const storage = makeMemoryStorage();
+      const { window } = buildDom({ debounce: 0, storage });
+      window.prompt = () => "Docs";
+      window.__mdNewFolder();
+      let st = window.__mdFilesState();
+      const folder = st.nodes.find((n) => n.type === "folder");
+      assert(!!folder, "folder created");
+
+      window.prompt = () => "child.md";
+      // Activate folder so new file lands inside
+      // (active is currently the auto-created Untitled.md at root,
+      //  so targetParentForNew returns root — we'll move file in next step)
+      window.__mdNewFile();
+      st = window.__mdFilesState();
+      const child = st.nodes.find(
+        (n) => n.type === "file" && n.name === "child.md",
+      );
+      assert(!!child, "child file created");
+
+      // Move child into folder
+      const moved = window.__mdMoveNode(child.id, folder.id);
+      assert(moved, "moveNode returned true");
+      st = window.__mdFilesState();
+      const child2 = st.nodes.find((n) => n.id === child.id);
+      assert(child2.parentId === folder.id, "child re-parented into folder");
+
+      // Cycle guard: cannot move folder into its own descendant
+      const cycle = window.__mdMoveNode(folder.id, child.id);
+      assert(cycle === false, "cycle move rejected (file target)");
+
+      // Create sub-folder inside folder, then try to move parent into it
+      // First activate folder
+      window.__mdSetActive(folder.id);
+      window.prompt = () => "Sub";
+      window.__mdNewFolder();
+      st = window.__mdFilesState();
+      const sub = st.nodes.find((n) => n.type === "folder" && n.name === "Sub");
+      assert(!!sub && sub.parentId === folder.id, "sub-folder under folder");
+      const cycle2 = window.__mdMoveNode(folder.id, sub.id);
+      assert(cycle2 === false, "cycle move rejected (descendant folder)");
+
+      // Recursive delete
+      window.confirm = () => true;
+      window.__mdRemoveNode(folder.id);
+      st = window.__mdFilesState();
+      assert(!st.nodes.find((n) => n.id === folder.id), "folder deleted");
+      assert(
+        !st.nodes.find((n) => n.id === child.id),
+        "child file deleted recursively",
+      );
+      assert(
+        !st.nodes.find((n) => n.id === sub.id),
+        "sub-folder deleted recursively",
+      );
+      assert(
+        storage.getItem("md-viewer:doc:" + child.id) === null,
+        "child doc key removed",
+      );
+    }
+
+    // 4) Multi-file external drop -> imports all, opens all, activates first
+    {
+      const storage = makeMemoryStorage();
+      const { window, document } = buildDom({ debounce: 0, storage });
+
+      // Stub FileReader to fire onload synchronously
+      window.FileReader = class {
+        readAsText(file) {
+          this.result = file._text;
+          if (typeof this.onload === "function") this.onload();
+        }
+      };
+      function fakeFile(name, text) {
+        return { name, type: "text/markdown", _text: text };
+      }
+
+      const evt = new window.Event("drop", { bubbles: true, cancelable: true });
+      Object.defineProperty(evt, "dataTransfer", {
+        value: {
+          types: ["Files"],
+          files: [
+            fakeFile("a.md", "# A"),
+            fakeFile("b.md", "# B"),
+            fakeFile("c.md", "# C"),
+          ],
+        },
+      });
+      Object.defineProperty(evt, "target", { value: document.body });
+      window.dispatchEvent(evt);
+
+      const st = window.__mdFilesState();
+      const fileNodes = st.nodes.filter((n) => n.type === "file");
+      // Auto-created Untitled.md + 3 imports = 4
+      assert(fileNodes.length === 4, "all dropped files imported");
+      const aNode = fileNodes.find((n) => n.name === "a.md");
+      assert(!!aNode, "a.md imported");
+      assert(st.activeId === aNode.id, "first dropped file activated");
+      assert(st.openIds.length >= 3, "imported files opened in tabs");
+      const editor = document.querySelector("#editor");
+      assert(editor.value === "# A", "editor shows first imported file");
+    }
+
+    // 5) Tab close: closing active falls back; Ctrl/Cmd+W shortcut
+    {
+      const storage = makeMemoryStorage();
+      const { window, document } = buildDom({ debounce: 0, storage });
+      window.prompt = () => "x.md";
+      window.__mdNewFile();
+      let st = window.__mdFilesState();
+      const x = st.activeId;
+      assert(st.openIds.length === 2, "two files open");
+      window.__mdCloseTab(x);
+      st = window.__mdFilesState();
+      assert(st.openIds.indexOf(x) === -1, "closed tab removed");
+      assert(st.activeId !== x, "active switched to fallback");
+      assert(
+        st.nodes.find((n) => n.id === x),
+        "closed file still exists in tree",
+      );
+    }
+
+    // 6) ZIP export preserves folder paths
+    {
+      const storage = makeMemoryStorage();
+      const { window } = buildDom({ debounce: 0, storage });
+      // JSZip stub capturing folder/file paths
+      const recorded = { paths: [] };
+      window.JSZip = function () {
+        return {
+          folder(p) {
+            recorded.paths.push(p + "/");
+            return this;
+          },
+          file(p, content) {
+            recorded.paths.push(p);
+            recorded["__" + p] = content;
+          },
+          generateAsync() {
+            return Promise.resolve(new window.Blob(["ZIPSTUB"]));
+          },
+        };
+      };
+
+      // Build a small tree
+      window.prompt = () => "Docs";
+      window.__mdNewFolder();
+      let st = window.__mdFilesState();
+      const folder = st.nodes.find((n) => n.type === "folder");
+      window.prompt = () => "guide.md";
+      window.__mdNewFile();
+      st = window.__mdFilesState();
+      const guide = st.nodes.find((n) => n.name === "guide.md");
+      window.__mdMoveNode(guide.id, folder.id);
+
+      await window.__mdExportZip();
+      assert(
+        recorded.paths.indexOf("Docs/") !== -1,
+        "folder path written to zip",
+      );
+      assert(
+        recorded.paths.indexOf("Docs/guide.md") !== -1,
+        "nested file path written to zip",
+      );
+    }
   }
 
   console.log(`\nResults: ${passes} passed, ${fails} failed`);
