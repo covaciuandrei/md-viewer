@@ -46,6 +46,7 @@ interface FileNode {
   const filesBtn = document.getElementById("filesBtn");
   const newFileBtn = document.getElementById("newFileBtn");
   const newFolderBtn = document.getElementById("newFolderBtn");
+  const clearAllBtn = document.getElementById("clearAllBtn");
   const filesTreeEl = document.getElementById(
     "filesTree",
   ) as HTMLElement | null;
@@ -1183,6 +1184,33 @@ interface FileNode {
 
   if (newFileBtn) newFileBtn.addEventListener("click", promptNewFile);
   if (newFolderBtn) newFolderBtn.addEventListener("click", promptNewFolder);
+
+  // ---- Clear all workspace ----
+  function clearAllWorkspace(): void {
+    let ok = true;
+    try {
+      ok = window.confirm(
+        "Clear all workspace? This will permanently delete every file and folder.",
+      );
+    } catch (_) {}
+    if (!ok) return;
+    // Remove every per-doc key for current nodes.
+    state.nodes.forEach((n) => {
+      if (n.type === "file") safeRemove(DOC_PREFIX + n.id);
+    });
+    state = defaultState();
+    expanded.clear();
+    saveExpanded();
+    saveState(state);
+    ensureAtLeastOneFile();
+    loadActiveIntoEditor();
+    render();
+    renderTabs();
+    renderTree();
+    updateUsage();
+  }
+  w.__mdClearAllWorkspace = clearAllWorkspace;
+  if (clearAllBtn) clearAllBtn.addEventListener("click", clearAllWorkspace);
 
   w.__mdRenderTree = renderTree;
   w.__mdNewFile = promptNewFile;

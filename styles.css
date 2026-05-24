@@ -203,6 +203,10 @@ body[data-outline="off"] .files-panel {
   color: var(--accent);
   border-color: var(--accent);
 }
+.files-actions button.danger:hover {
+  color: #ef4444;
+  border-color: #ef4444;
+}
 .files-tree {
   list-style: none;
   margin: 0;
